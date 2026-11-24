@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and run tests (${{ matrix.compiler }})
+        env:
+          CC: ${{ matrix.compiler }}
+        run: make clean && make test CFLAGS='-std=c11 -Wall -Wextra -Wpedantic -Werror -O2'
+
+      - name: Build the example
+        env:
+          CC: ${{ matrix.compiler }}
+        run: make example CFLAGS='-std=c11 -Wall -Wextra -Wpedantic -Werror -O2'
