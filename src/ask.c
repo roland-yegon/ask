@@ -3,10 +3,23 @@
 #include <ctype.h>
 #include <errno.h>
 #include <limits.h>
+#include <locale.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* Indirection used only by the allocation-failure tests; production builds
+ * resolve these directly to the C library allocators. */
+#ifndef ASK_MALLOC
+#define ASK_MALLOC malloc
+#endif
+#ifndef ASK_REALLOC
+#define ASK_REALLOC realloc
+#endif
+#ifndef ASK_FREE
+#define ASK_FREE free
+#endif
 
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
 #define ASK_THREAD_LOCAL _Thread_local
@@ -26,11 +39,12 @@ ask_error ask_last_error(void)
 const char *ask_error_string(ask_error error)
 {
     switch (error) {
-    case ASK_OK:    return "success";
-    case ASK_EOF:   return "end of input";
-    case ASK_NOMEM: return "out of memory";
+    case ASK_OK:     return "success";
+    case ASK_EOF:    return "end of input";
+    case ASK_NOMEM:  return "out of memory";
     case ASK_EINVAL: return "invalid argument";
-    default:        return "unknown error";
+    case ASK_EIO:    return "stream error";
+    default:         return "unknown error";
     }
 }
 
@@ -60,7 +74,7 @@ char *ask_line_from(FILE *in, FILE *out, const char *prompt)
         return NULL;
     }
 
-    buf = malloc(cap);
+    buf = ASK_MALLOC(cap);
     if (buf == NULL) {
         last_error = ASK_NOMEM;
         return NULL;
@@ -76,14 +90,15 @@ char *ask_line_from(FILE *in, FILE *out, const char *prompt)
         if (len + 1 >= cap) {
             char *tmp;
             if (cap > SIZE_MAX / 2) {
-                free(buf);
+                ASK_FREE(buf);
                 discard_rest_of_line(in);
                 last_error = ASK_NOMEM;
                 return NULL;
             }
-            tmp = realloc(buf, cap * 2);
+            tmp = ASK_REALLOC(buf, cap * 2);
             if (tmp == NULL) {
-                free(buf);
+                /* The original allocation is still valid and is freed here. */
+                ASK_FREE(buf);
                 discard_rest_of_line(in);
                 last_error = ASK_NOMEM;
                 return NULL;
@@ -94,9 +109,18 @@ char *ask_line_from(FILE *in, FILE *out, const char *prompt)
         buf[len++] = (char)c;
     }
 
+    /* An I/O error is never reported as a complete line: even if bytes were
+     * read before it, they are incomplete input. Leave the stream's error
+     * indicator set; the caller can clearerr() if it wants to retry. */
+    if (ferror(in)) {
+        ASK_FREE(buf);
+        last_error = ASK_EIO;
+        return NULL;
+    }
+
     /* EOF with nothing typed means there is no one left to ask. */
     if (c == EOF && len == 0) {
-        free(buf);
+        ASK_FREE(buf);
         last_error = ASK_EOF;
         return NULL;
     }
@@ -170,24 +194,86 @@ static bool parse_long_value(const char *text, void *out)
     return parse_long(text, (long *)out);
 }
 
+/* Accept only decimal floating-point syntax:
+ *   [sign] ( digits [separator [digits]] | separator digits ) [exponent]
+ * with optional surrounding whitespace. The decimal separator comes from
+ * localeconv() for the current locale; the library never changes it. */
+static bool valid_decimal_syntax(const char *start, const char **end_out)
+{
+    const char *point = localeconv()->decimal_point;
+    size_t point_len = strlen(point);
+    const char *p = start;
+    bool digits = false;
+
+    if (*p == '+' || *p == '-') {
+        p++;
+    }
+
+    if (point_len > 0 && strncmp(p, point, point_len) == 0) {
+        p += point_len;
+        if (!isdigit((unsigned char)*p)) {
+            return false;
+        }
+        while (isdigit((unsigned char)*p)) {
+            p++;
+            digits = true;
+        }
+    } else {
+        if (!isdigit((unsigned char)*p)) {
+            return false;
+        }
+        while (isdigit((unsigned char)*p)) {
+            p++;
+            digits = true;
+        }
+        if (point_len > 0 && strncmp(p, point, point_len) == 0) {
+            p += point_len;
+            while (isdigit((unsigned char)*p)) {
+                p++;
+                digits = true;
+            }
+        }
+    }
+
+    if (!digits) {
+        return false;
+    }
+
+    if (*p == 'e' || *p == 'E') {
+        p++;
+        if (*p == '+' || *p == '-') {
+            p++;
+        }
+        if (!isdigit((unsigned char)*p)) {
+            return false;
+        }
+        while (isdigit((unsigned char)*p)) {
+            p++;
+        }
+    }
+
+    if (!only_whitespace_remains(p)) {
+        return false;
+    }
+
+    *end_out = p;
+    return true;
+}
+
 static bool parse_double_value(const char *text, void *out)
 {
     const char *start = skip_whitespace(text);
-    char *end;
+    const char *syntax_end;
+    char *conv_end;
     double value;
 
-    if (*start == '\0') {
+    if (*start == '\0' || !valid_decimal_syntax(start, &syntax_end)) {
         return false;
     }
 
     errno = 0;
-    value = strtod(start, &end);
-    if (end == start || !only_whitespace_remains(end) || !isfinite(value)) {
-        return false;
-    }
-    /* strtod sets ERANGE for overflow and for underflow; neither is a
-     * usable, exactly representable answer here. */
-    if (errno == ERANGE) {
+    value = strtod(start, &conv_end);
+    if (conv_end != syntax_end || errno == ERANGE || !isfinite(value)) {
         return false;
     }
 
@@ -195,13 +281,19 @@ static bool parse_double_value(const char *text, void *out)
     return true;
 }
 
+/* Deliberately ASCII-oriented: one byte in 0x21..0x7e, with whitespace
+ * allowed around it. Multi-byte UTF-8 sequences are rejected because a
+ * single char cannot represent a Unicode character. */
 static bool parse_char_value(const char *text, void *out)
 {
     const char *start = skip_whitespace(text);
-    if (*start == '\0') {
+    unsigned char c = (unsigned char)*start;
+
+    if (c < 0x21 || c > 0x7e || !only_whitespace_remains(start + 1)) {
         return false;
     }
-    *(char *)out = *start;
+
+    *(char *)out = (char)c;
     return true;
 }
 
@@ -225,7 +317,7 @@ static bool ask_value(FILE *in, FILE *out, const char *prompt,
         }
 
         valid = parse(line, value);
-        free(line);
+        ASK_FREE(line);
 
         if (valid) {
             last_error = ASK_OK;
@@ -255,13 +347,13 @@ bool ask_long_from(FILE *in, FILE *out, const char *prompt, long *value)
 bool ask_double_from(FILE *in, FILE *out, const char *prompt, double *value)
 {
     return ask_value(in, out, prompt, parse_double_value, value,
-                     "Expected a number.");
+                     "Expected a decimal number.");
 }
 
 bool ask_char_from(FILE *in, FILE *out, const char *prompt, char *value)
 {
     return ask_value(in, out, prompt, parse_char_value, value,
-                     "Expected at least one character.");
+                     "Expected exactly one printable ASCII character.");
 }
 
 bool ask_int(const char *prompt, int *out)

@@ -15,15 +15,32 @@ jobs:
       fail-fast: false
       matrix:
         compiler: [gcc, clang]
+    env:
+      CC: ${{ matrix.compiler }}
+      BASE_CFLAGS: -std=c11 -Wall -Wextra -Wpedantic -Werror -O2
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build and run tests (${{ matrix.compiler }})
-        env:
-          CC: ${{ matrix.compiler }}
-        run: make clean && make test CFLAGS='-std=c11 -Wall -Wextra -Wpedantic -Werror -O2'
+      - name: Build and run tests
+        run: make clean && make test CFLAGS="$BASE_CFLAGS"
 
       - name: Build the example
-        env:
-          CC: ${{ matrix.compiler }}
-        run: make example CFLAGS='-std=c11 -Wall -Wextra -Wpedantic -Werror -O2'
+        run: make example CFLAGS="$BASE_CFLAGS"
+
+  sanitizers:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+    env:
+      CC: ${{ matrix.compiler }}
+      SAN_CFLAGS: >-
+        -std=c11 -Wall -Wextra -Wpedantic -Werror -O1 -g
+        -fno-omit-frame-pointer -fsanitize=address,undefined
+        -fno-sanitize-recover=all
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run tests under AddressSanitizer and UBSan
+        run: make clean && make test CFLAGS="$SAN_CFLAGS"

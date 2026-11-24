@@ -8,6 +8,7 @@ BUILD      := build
 LIB        := $(BUILD)/libask.a
 OBJ        := $(BUILD)/ask.o
 TEST_BIN   := $(BUILD)/test_ask
+ALLOC_BIN  := $(BUILD)/test_alloc
 EXAMPLE    := $(BUILD)/basic
 
 .PHONY: all lib example test check clean install
@@ -27,11 +28,18 @@ example: $(EXAMPLE)
 $(EXAMPLE): examples/basic.c $(LIB) | $(BUILD)
 	$(CC) $(CFLAGS) -Isrc $< $(LIB) -o $@
 
-test: $(TEST_BIN)
+test: $(TEST_BIN) $(ALLOC_BIN)
 	./$(TEST_BIN)
+	./$(ALLOC_BIN)
 
 $(TEST_BIN): tests/test_ask.c $(LIB) | $(BUILD)
 	$(CC) $(CFLAGS) -Isrc $< $(LIB) -o $@
+
+# Compile ask.c with failure-injecting allocators to exercise OOM paths.
+$(ALLOC_BIN): tests/test_alloc.c tests/test_alloc.h src/ask.c src/ask.h | $(BUILD)
+	$(CC) $(CFLAGS) -Isrc -include tests/test_alloc.h \
+		-DASK_MALLOC=ask_test_malloc -DASK_REALLOC=ask_test_realloc \
+		-DASK_FREE=ask_test_free src/ask.c $< -o $@
 
 check: test
 

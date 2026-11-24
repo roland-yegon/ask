@@ -19,7 +19,7 @@ int main(void)
     if (!ask_double("Score? ", &score)) {
         goto input_ended;
     }
-    if (!ask_char("Initial? ", &initial)) {
+    if (!ask_char("Initial (one character)? ", &initial)) {
         goto input_ended;
     }
 
@@ -37,6 +37,7 @@ int main(void)
     return EXIT_SUCCESS;
 
 input_ended:
-    fprintf(stderr, "\nInput ended: %s\n", ask_error_string(ask_last_error()));
+    fprintf(stderr, "\nCould not read input: %s\n",
+            ask_error_string(ask_last_error()));
     return EXIT_FAILURE;
 }
