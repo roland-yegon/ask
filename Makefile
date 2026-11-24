@@ -11,7 +11,10 @@ TEST_BIN   := $(BUILD)/test_ask
 ALLOC_BIN  := $(BUILD)/test_alloc
 EXAMPLE    := $(BUILD)/basic
 
-.PHONY: all lib example test check clean install
+.PHONY: all lib example test check clean install FORCE
+
+# Force recompilation when CC or CFLAGS change between invocations.
+FORCE:
 
 all: lib example
 
@@ -20,7 +23,7 @@ lib: $(LIB)
 $(LIB): $(OBJ)
 	$(AR) rcs $@ $^
 
-$(OBJ): src/ask.c src/ask.h | $(BUILD)
+$(OBJ): src/ask.c src/ask.h FORCE | $(BUILD)
 	$(CC) $(CFLAGS) -Isrc -c $< -o $@
 
 example: $(EXAMPLE)
@@ -36,7 +39,7 @@ $(TEST_BIN): tests/test_ask.c $(LIB) | $(BUILD)
 	$(CC) $(CFLAGS) -Isrc $< $(LIB) -o $@
 
 # Compile ask.c with failure-injecting allocators to exercise OOM paths.
-$(ALLOC_BIN): tests/test_alloc.c tests/test_alloc.h src/ask.c src/ask.h | $(BUILD)
+$(ALLOC_BIN): tests/test_alloc.c tests/test_alloc.h src/ask.c src/ask.h FORCE | $(BUILD)
 	$(CC) $(CFLAGS) -Isrc -include tests/test_alloc.h \
 		-DASK_MALLOC=ask_test_malloc -DASK_REALLOC=ask_test_realloc \
 		-DASK_FREE=ask_test_free src/ask.c $< -o $@
