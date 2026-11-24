@@ -31,6 +31,6 @@
     <circle cx="672" cy="80" r="5" fill="#fbbf24"/>
     <circle cx="690" cy="80" r="5" fill="#34d399"/>
     <text x="648" y="118" fill="#c7d2fe">$ ask_int("Age? ", &amp;age);</text>
-    <text x="648" y="148" fill="#67e8f9">Age? 28  ✓</text>
+    <text x="648" y="148" fill="#67e8f9">Age? 28</text>
   </g>
 </svg>
